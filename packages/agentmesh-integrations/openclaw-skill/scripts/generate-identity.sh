@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat,
 key = Ed25519PrivateKey.generate()
 pub = key.public_key()
 pub_bytes = pub.public_bytes(Encoding.Raw, PublicFormat.Raw)
-did = 'did:agentmesh:' + hashlib.sha256(pub_bytes).hexdigest()[:16]
+did = 'did:mesh:' + hashlib.sha256(pub_bytes).hexdigest()[:16]
 
 caps = [c.strip() for c in '${CAPABILITIES}'.split(',') if c.strip()]
 

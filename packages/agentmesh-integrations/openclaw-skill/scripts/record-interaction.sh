@@ -15,14 +15,14 @@ done
 python3 -c "
 import json, datetime
 try:
-    from agentmesh.trust import RewardEngine
-    engine = RewardEngine()
+    from agentmesh.services import RewardService
+    service = RewardService()
     if '$OUTCOME' == 'success':
-        engine.record_success('$AGENT')
+        service.record_task_success('$AGENT', task_id='openclaw-interaction')
     else:
-        engine.record_failure('$AGENT', severity=float('$SEVERITY'))
-    score = engine.get_score('$AGENT')
-    print(json.dumps(score, indent=2))
+        service.record_task_failure('$AGENT', reason='severity=$SEVERITY')
+    score = service.get_score('$AGENT')
+    print(json.dumps(score.to_dict() if hasattr(score, 'to_dict') else score, indent=2))
 except ImportError:
     delta = 0.01 if '$OUTCOME' == 'success' else -float('$SEVERITY')
     result = {

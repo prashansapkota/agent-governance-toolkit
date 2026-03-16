@@ -2,6 +2,8 @@
 
 Deploy OpenClaw as an autonomous agent with the Agent Governance Toolkit as a sidecar on Azure Kubernetes Service (AKS) for runtime policy enforcement, identity verification, and SLO monitoring.
 
+> **New:** The toolkit now integrates with [NVIDIA OpenShell](../integrations/openshell.md) for combined sandbox isolation + governance intelligence. See the [OpenShell integration guide](../integrations/openshell.md) for the complementary architecture.
+
 > **See also:** [Deployment Overview](README.md) | [AKS Deployment](../../packages/agent-mesh/docs/deployment/azure.md) | [OpenClaw on ClawHub](https://clawhub.ai/microsoft/agentmesh-governance)
 
 ---

@@ -15,10 +15,15 @@ done
 python3 -c "
 import json
 try:
-    from agentmesh.identity import AgentIdentity
-    identity = AgentIdentity.from_did('$DID')
-    verified = identity.verify(b'$MESSAGE', '$SIGNATURE')
-    print(json.dumps({'did': '$DID', 'verified': verified}, indent=2))
+    from agentmesh.identity import AgentIdentity, AgentDID, IdentityRegistry
+    parsed = AgentDID.from_string('$DID')
+    registry = IdentityRegistry()
+    identity = registry.get(parsed)
+    if identity is None:
+        print(json.dumps({'did': '$DID', 'verified': False, 'error': 'DID not found in registry'}, indent=2))
+    else:
+        verified = identity.verify_signature(b'$MESSAGE', '$SIGNATURE')
+        print(json.dumps({'did': '$DID', 'verified': verified}, indent=2))
 except ImportError:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     import base64

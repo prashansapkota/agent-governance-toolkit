@@ -9,7 +9,7 @@ description: >
   (5) user asks about agent safety, governance, compliance, or trust.
   Enterprise-grade: 1,600+ tests, merged into Dify (65K★), LlamaIndex (47K★),
   Microsoft Agent-Lightning (15K★).
-version: 1.0.0
+version: 1.1.0
 metadata:
   openclaw:
     requires:
@@ -17,7 +17,7 @@ metadata:
         - python3
         - pip
     emoji: "🛡️"
-    homepage: https://github.com/imran-siddique/agentmesh-integrations/tree/master/openclaw-skill
+    homepage: https://github.com/microsoft/agent-governance-toolkit/tree/main/packages/agentmesh-integrations/openclaw-skill
 ---
 
 # AgentMesh Governance — Trust & Policy for OpenClaw Agents
@@ -70,7 +70,7 @@ collaboration health.
 Verify an agent's Ed25519 cryptographic identity before trusting its output:
 
 ```bash
-scripts/verify-identity.sh --did "did:agentmesh:abc123" --message "hello" --signature "base64sig"
+scripts/verify-identity.sh --did "did:mesh:abc123" --message "hello" --signature "base64sig"
 ```
 
 Returns `verified: true/false`. Use when receiving data from another agent.
@@ -159,12 +159,12 @@ governance engine:
 ```
 OpenClaw Agent → SKILL.md scripts → AgentMesh Engine
                                      ├── GovernancePolicy (enforcement)
-                                     ├── TrustEngine (5-dimension scoring)
+                                     ├── RewardService (5-dimension scoring)
                                      ├── AgentIdentity (Ed25519 DIDs)
-                                     └── hash-chainAuditChain (tamper-evident logs)
+                                     └── AuditLog (tamper-evident Merkle chains)
 ```
 
-Part of the [Agent Ecosystem](https://imran-siddique.github.io):
-[AgentMesh](https://github.com/imran-siddique/agent-mesh) ·
-[Agent OS](https://github.com/imran-siddique/agent-os) ·
-[Agent SRE](https://github.com/imran-siddique/agent-sre)
+Part of the [Agent Governance Toolkit](https://github.com/microsoft/agent-governance-toolkit):
+[AgentMesh](https://github.com/microsoft/agent-governance-toolkit/tree/main/packages/agent-mesh) ·
+[Agent OS](https://github.com/microsoft/agent-governance-toolkit/tree/main/packages/agent-os) ·
+[Agent SRE](https://github.com/microsoft/agent-governance-toolkit/tree/main/packages/agent-sre)

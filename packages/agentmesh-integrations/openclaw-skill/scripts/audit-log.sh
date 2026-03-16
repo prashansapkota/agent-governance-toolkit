@@ -15,12 +15,16 @@ done
 python3 -c "
 import json
 try:
-    from agentmesh.audit import MerkleAuditChain
-    chain = MerkleAuditChain()
-    entries = chain.get_entries(agent='$AGENT' or None, last=int('$LAST'))
+    from agentmesh.governance.audit import AuditLog
+    audit_log = AuditLog()
+    agent_filter = '$AGENT' or None
+    if agent_filter:
+        entries = audit_log.get_entries_for_agent(agent_did=agent_filter, limit=int('$LAST'))
+    else:
+        entries = audit_log.query(limit=int('$LAST'))
     if '$VERIFY' == 'true':
-        valid = chain.verify_integrity()
-        print(json.dumps({'integrity': 'valid' if valid else 'TAMPERED', 'entries': len(entries)}, indent=2))
+        valid, error = audit_log.verify_integrity()
+        print(json.dumps({'integrity': 'valid' if valid else 'TAMPERED', 'error': error, 'entries': len(entries)}, indent=2))
     else:
         print(json.dumps([e.to_dict() for e in entries], indent=2))
 except ImportError:

@@ -13,10 +13,10 @@ done
 python3 -c "
 import json
 try:
-    from agentmesh.trust import RewardEngine
-    engine = RewardEngine()
-    score = engine.get_score('$AGENT')
-    print(json.dumps(score, indent=2))
+    from agentmesh.services import RewardService
+    service = RewardService()
+    score = service.get_score('$AGENT')
+    print(json.dumps(score.to_dict() if hasattr(score, 'to_dict') else score, indent=2))
 except ImportError:
     # Standalone mode — return baseline trust info
     result = {

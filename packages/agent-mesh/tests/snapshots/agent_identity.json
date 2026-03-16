@@ -21,5 +21,6 @@
   "status": "active",
   "revocation_reason": null,
   "parent_did": null,
-  "delegation_depth": 0
+  "delegation_depth": 0,
+  "max_initial_trust_score": null
 }
