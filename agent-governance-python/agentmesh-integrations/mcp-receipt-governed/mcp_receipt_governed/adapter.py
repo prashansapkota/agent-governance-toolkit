@@ -122,7 +122,7 @@ class CedarPolicyEvaluator:
 
         # Check for catch-all permit
         catch_all = re.compile(
-            r'permit\s*\(\s*principal\s*,\s*action\s*,\s*resource\s*\)\s*;',
+            r"permit\s*\(\s*principal\s*,\s*action\s*,\s*resource\s*\)\s*;",
             re.DOTALL,
         )
         if catch_all.search(self.policy_content):
@@ -140,6 +140,10 @@ class McpReceiptAdapter:
       2. Creates a ``GovernanceReceipt`` recording the decision.
       3. Signs the receipt with the provided Ed25519 key.
       4. Stores the receipt in the ``ReceiptStore`` audit trail.
+
+    Receipts are hash-chained: each receipt's ``parent_receipt_hash`` is set
+    to the ``payload_hash()`` of the preceding receipt in the store, enabling
+    offline detection of inserted or deleted tool calls.
 
     Args:
         cedar_policy: Cedar policy content string.
@@ -169,9 +173,13 @@ class McpReceiptAdapter:
         agent_did: str,
         tool_name: str,
         tool_args: Optional[Dict[str, Any]] = None,
-        resource: str = "Resource::\"default\"",
+        resource: str = 'Resource::"default"',
     ) -> GovernanceReceipt:
         """Evaluate policy and create a signed governance receipt.
+
+        The receipt is generated **before** the tool call executes (after
+        policy evaluation).  If signing fails, the call is blocked —
+        fail-closed enforcement.
 
         Args:
             agent_did: DID of the calling agent.
@@ -186,16 +194,22 @@ class McpReceiptAdapter:
         context = {"agent_did": agent_did, "resource": resource}
         allowed = self._evaluator.evaluate(tool_name, context)
 
-        # 2. Create receipt
+        # 2. Determine parent receipt hash for chaining
+        parent_hash: Optional[str] = None
+        if self.store._receipts:
+            parent_hash = self.store._receipts[-1].payload_hash()
+
+        # 3. Create receipt
         receipt = GovernanceReceipt(
             tool_name=tool_name,
             agent_did=agent_did,
             cedar_policy_id=self._policy_id,
             cedar_decision="allow" if allowed else "deny",
             args_hash=hash_tool_args(tool_args),
+            parent_receipt_hash=parent_hash,
         )
 
-        # 3. Sign receipt (if key provided)
+        # 4. Sign receipt (if key provided)
         if self._signing_key:
             try:
                 sign_receipt(receipt, self._signing_key)
@@ -203,7 +217,7 @@ class McpReceiptAdapter:
                 _logger.error(f"Receipt signing failed: {type(exc).__name__}")
                 receipt.error = f"signing_failed: {type(exc).__name__}"
 
-        # 4. Store receipt
+        # 5. Store receipt
         self.store.add(receipt)
 
         return receipt
@@ -214,7 +228,7 @@ class McpReceiptAdapter:
         tool_name: str,
         tool_fn: Callable[..., Any],
         tool_args: Optional[Dict[str, Any]] = None,
-        resource: str = "Resource::\"default\"",
+        resource: str = 'Resource::"default"',
     ) -> tuple[GovernanceReceipt, Any]:
         """Evaluate policy, create receipt, and execute the tool if allowed.
 

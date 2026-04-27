@@ -9,8 +9,12 @@ Each receipt links:
   - The agent DID requesting the tool call
   - An Ed25519 signature for non-repudiation
 
-Receipts use JCS-style canonical JSON for deterministic hashing so that
-any party can independently verify the receipt signature.
+Receipts use RFC 8785 JSON Canonicalization Scheme (JCS) for deterministic
+hashing so that any party can independently verify the receipt signature.
+
+Hash chaining links receipts via ``parent_receipt_hash`` so that verifiers
+can detect insertion or deletion of individual tool calls without replaying
+the full session log.
 """
 
 from __future__ import annotations
@@ -38,6 +42,8 @@ class GovernanceReceipt:
         cedar_decision: Whether Cedar permitted or denied the action.
         args_hash: SHA-256 hash of the tool call arguments (canonical JSON).
         timestamp: Unix timestamp of the decision.
+        parent_receipt_hash: SHA-256 hash of the preceding receipt's canonical
+            payload.  ``None`` for the first receipt in a chain.
         signature: Ed25519 signature over the canonical receipt payload.
         signer_public_key: Hex-encoded Ed25519 public key of the signer.
         error: Optional error message if the decision failed.
@@ -50,17 +56,22 @@ class GovernanceReceipt:
     cedar_decision: Literal["allow", "deny"] = "deny"
     args_hash: str = ""
     timestamp: float = field(default_factory=time.time)
+    parent_receipt_hash: Optional[str] = None
     signature: Optional[str] = None
     signer_public_key: Optional[str] = None
     error: Optional[str] = None
 
     def canonical_payload(self) -> str:
-        """Return JCS-style canonical JSON for deterministic hashing.
+        """Return RFC 8785 (JCS) canonical JSON for deterministic hashing.
 
         Only governance-relevant fields are included; signature fields are
         excluded because the signature covers this payload.
+
+        The output uses ``ensure_ascii=False`` so that Unicode codepoints are
+        emitted as raw UTF-8 rather than ``\\uXXXX`` escapes, which is required
+        by RFC 8785 § 3.2.2.2.
         """
-        data = {
+        data: Dict[str, Any] = {
             "agent_did": self.agent_did,
             "args_hash": self.args_hash,
             "cedar_decision": self.cedar_decision,
@@ -69,7 +80,9 @@ class GovernanceReceipt:
             "timestamp": self.timestamp,
             "tool_name": self.tool_name,
         }
-        return json.dumps(data, sort_keys=True, separators=(",", ":"))
+        if self.parent_receipt_hash is not None:
+            data["parent_receipt_hash"] = self.parent_receipt_hash
+        return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
     def payload_hash(self) -> str:
         """SHA-256 hash of the canonical payload."""
@@ -85,10 +98,61 @@ class GovernanceReceipt:
             "cedar_decision": self.cedar_decision,
             "args_hash": self.args_hash,
             "timestamp": self.timestamp,
+            "parent_receipt_hash": self.parent_receipt_hash,
             "payload_hash": self.payload_hash(),
             "signature": self.signature,
             "signer_public_key": self.signer_public_key,
             "error": self.error,
+        }
+
+    def to_slsa_provenance(self) -> Dict[str, Any]:
+        """Emit the receipt as a SLSA v1.0 provenance predicate.
+
+        Maps the governance decision to the in-toto Statement / SLSA
+        Provenance format so that standard supply-chain verification
+        tools (``slsa-verifier``, ``in-toto``) can consume it.
+
+        Returns:
+            An in-toto v1 Statement dict with a SLSA Provenance predicate.
+        """
+        parent_dep: Optional[Dict[str, Any]] = None
+        if self.parent_receipt_hash:
+            parent_dep = {
+                "uri": "pkg:agentmesh/receipt/parent",
+                "digest": {"sha256": self.parent_receipt_hash},
+            }
+
+        return {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [
+                {
+                    "name": f"pkg:agentmesh/tool/{self.tool_name}",
+                    "digest": {"sha256": self.args_hash},
+                }
+            ],
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {
+                "buildDefinition": {
+                    "buildType": ("https://agent-governance.org/schema/mcp-tool-call/v1"),
+                    "externalParameters": {
+                        "agent_did": self.agent_did,
+                        "cedar_policy_id": self.cedar_policy_id,
+                        "cedar_decision": self.cedar_decision,
+                    },
+                    "resolvedDependencies": ([parent_dep] if parent_dep else []),
+                },
+                "runDetails": {
+                    "builder": {
+                        "id": ("https://agent-governance.org/adapters/" "mcp-receipt-governed"),
+                    },
+                    "metadata": {
+                        "invocationId": self.receipt_id,
+                        "startedOn": time.strftime(
+                            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.timestamp)
+                        ),
+                    },
+                },
+            },
         }
 
 
@@ -131,11 +195,7 @@ def sign_receipt(receipt: GovernanceReceipt, private_key_hex: str) -> Governance
     private_key = Ed25519PrivateKey.from_private_bytes(seed)
     sig = private_key.sign(payload)
     receipt.signature = sig.hex()
-    receipt.signer_public_key = (
-        private_key.public_key()
-        .public_bytes_raw()
-        .hex()
-    )
+    receipt.signer_public_key = private_key.public_key().public_bytes_raw().hex()
 
     return receipt
 
@@ -166,6 +226,51 @@ def verify_receipt(receipt: GovernanceReceipt) -> bool:
         return False
     except Exception:
         return False
+
+
+def verify_receipt_chain(receipts: List[GovernanceReceipt]) -> List[str]:
+    """Verify the hash chain and signatures of an ordered receipt list.
+
+    Checks:
+      1. The first receipt has no parent (``parent_receipt_hash is None``).
+      2. Each subsequent receipt's ``parent_receipt_hash`` equals the
+         ``payload_hash()`` of the preceding receipt.
+      3. Every signed receipt passes Ed25519 verification.
+
+    Args:
+        receipts: Ordered list of receipts to verify.
+
+    Returns:
+        A list of human-readable error strings. An empty list means the
+        chain is fully valid.
+    """
+    errors: List[str] = []
+
+    if not receipts:
+        return errors
+
+    for i, receipt in enumerate(receipts):
+        # Chain contiguity
+        if i == 0:
+            if receipt.parent_receipt_hash is not None:
+                errors.append(f"[{i}] First receipt has unexpected parent_receipt_hash")
+        else:
+            expected = receipts[i - 1].payload_hash()
+            if receipt.parent_receipt_hash != expected:
+                errors.append(
+                    f"[{i}] Hash chain broken: expected parent {expected[:16]}…, "
+                    f"got {(receipt.parent_receipt_hash or 'None')[:16]}…"
+                )
+
+        # Signature verification (skip unsigned)
+        if receipt.signature:
+            if not verify_receipt(receipt):
+                errors.append(
+                    f"[{i}] Ed25519 signature verification failed for "
+                    f"receipt {receipt.receipt_id}"
+                )
+
+    return errors
 
 
 class ReceiptStore:
