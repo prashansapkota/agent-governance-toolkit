@@ -155,6 +155,27 @@ class TestJCSCanonicalization:
         payload = r.canonical_payload()
         assert "\u8bfb\u53d6\u6570\u636e" in payload
 
+    def test_replacement_character_preserved(self):
+        """U+FFFD replacement character round-trips through canonical JSON."""
+        r = GovernanceReceipt(
+            receipt_id="test-id",
+            tool_name="bad\ufffdtool",
+            timestamp=1.0,
+        )
+        payload = r.canonical_payload()
+        assert "\ufffd" in payload
+        assert "\\u" not in payload
+
+    def test_rtl_arabic_characters_preserved(self):
+        """Right-to-left Arabic text is preserved in canonical form."""
+        r = GovernanceReceipt(
+            receipt_id="test-id",
+            tool_name="\u0642\u0631\u0627\u0621\u0629",
+            timestamp=1.0,
+        )
+        payload = r.canonical_payload()
+        assert "\u0642\u0631\u0627\u0621\u0629" in payload
+
     def test_empty_string_fields(self):
         """Empty strings are valid and canonical."""
         r = GovernanceReceipt(
@@ -339,6 +360,57 @@ class TestSLSAProvenance:
         assert builder_host and (
             builder_host == "agent-governance.org" or builder_host.endswith(".agent-governance.org")
         )
+
+    def test_slsa_schema_required_fields(self):
+        """SLSA Provenance v1 requires specific top-level and predicate fields."""
+        r = GovernanceReceipt(
+            receipt_id="test-id",
+            tool_name="ReadData",
+            agent_did="did:mesh:a1",
+            cedar_policy_id="policy:v1",
+            cedar_decision="allow",
+            args_hash="hash123",
+            timestamp=1700000000.0,
+        )
+        slsa = r.to_slsa_provenance()
+        # Top-level in-toto Statement fields
+        assert "_type" in slsa
+        assert "subject" in slsa
+        assert "predicateType" in slsa
+        assert "predicate" in slsa
+        # SLSA buildDefinition
+        build_def = slsa["predicate"]["buildDefinition"]
+        assert "buildType" in build_def
+        assert "externalParameters" in build_def
+        assert "resolvedDependencies" in build_def
+        # SLSA runDetails
+        run = slsa["predicate"]["runDetails"]
+        assert "builder" in run
+        assert "id" in run["builder"]
+        assert "metadata" in run
+        assert "invocationId" in run["metadata"]
+        assert "startedOn" in run["metadata"]
+        # startedOn must be ISO 8601 UTC format
+        started_on = run["metadata"]["startedOn"]
+        assert started_on.endswith("Z")
+        assert "T" in started_on
+
+    def test_slsa_external_parameters_content(self):
+        """SLSA externalParameters captures agent DID, policy ID, and decision."""
+        r = GovernanceReceipt(
+            receipt_id="test-id",
+            tool_name="DeleteFile",
+            agent_did="did:mesh:agent-99",
+            cedar_policy_id="policy:strict:v2",
+            cedar_decision="deny",
+            args_hash="cafebabe",
+            timestamp=1700000000.0,
+        )
+        slsa = r.to_slsa_provenance()
+        params = slsa["predicate"]["buildDefinition"]["externalParameters"]
+        assert params["agent_did"] == "did:mesh:agent-99"
+        assert params["cedar_policy_id"] == "policy:strict:v2"
+        assert params["cedar_decision"] == "deny"
 
 
 # ── Hash Tool Args ──
@@ -570,6 +642,54 @@ class TestVerifyReceiptChain:
         sign_receipt(r, signing_key)
         errors = verify_receipt_chain([r], trusted_keys=["deadbeef" * 4])
         assert any("not in trusted key set" in e for e in errors)
+        assert any("rejected" in e for e in errors)
+
+    def test_duplicate_receipt_id_detected(self, signing_key):
+        """Duplicate receipt_ids are flagged as potential replay attacks."""
+        r1 = GovernanceReceipt(receipt_id="same-id", timestamp=1.0)
+        sign_receipt(r1, signing_key)
+        r2 = GovernanceReceipt(
+            receipt_id="same-id",
+            timestamp=2.0,
+            parent_receipt_hash=r1.payload_hash(),
+        )
+        sign_receipt(r2, signing_key)
+        errors = verify_receipt_chain([r1, r2])
+        assert any("Duplicate receipt_id" in e for e in errors)
+        assert any("replay" in e.lower() for e in errors)
+
+    def test_single_receipt_chain_valid_when_signed(self, signing_key):
+        """A single signed receipt with no parent is a valid chain."""
+        r = GovernanceReceipt(receipt_id="only", timestamp=1.0)
+        sign_receipt(r, signing_key)
+        assert verify_receipt_chain([r]) == []
+
+    def test_inserted_receipt_detected(self, signing_key):
+        """Inserting a receipt into the middle breaks hash continuity."""
+        r1 = GovernanceReceipt(receipt_id="r1", timestamp=1.0)
+        sign_receipt(r1, signing_key)
+        r2 = GovernanceReceipt(
+            receipt_id="r2", timestamp=2.0, parent_receipt_hash=r1.payload_hash()
+        )
+        sign_receipt(r2, signing_key)
+        r3 = GovernanceReceipt(
+            receipt_id="r3", timestamp=3.0, parent_receipt_hash=r2.payload_hash()
+        )
+        sign_receipt(r3, signing_key)
+
+        # Insert a foreign receipt between r1 and r2
+        r_evil = GovernanceReceipt(receipt_id="evil", timestamp=1.5)
+        sign_receipt(r_evil, signing_key)
+
+        errors = verify_receipt_chain([r1, r_evil, r2, r3])
+        chain_errors = [e for e in errors if "Hash chain broken" in e]
+        assert len(chain_errors) >= 1
+
+    def test_all_fields_missing_receipt(self):
+        """A receipt with all default/empty values is treated as unsigned."""
+        r = GovernanceReceipt()
+        errors = verify_receipt_chain([r])
+        assert any("Unsigned" in e for e in errors)
 
 
 # ── Receipt Store ──

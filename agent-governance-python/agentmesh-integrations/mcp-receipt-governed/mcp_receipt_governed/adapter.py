@@ -213,13 +213,16 @@ class McpReceiptAdapter:
             parent_receipt_hash=parent_hash,
         )
 
-        # 4. Sign receipt (if key provided)
+        # 4. Sign receipt (if key provided) — fail-closed enforcement
         if self._signing_key:
             try:
                 sign_receipt(receipt, self._signing_key)
             except Exception as exc:
                 _logger.error(f"Receipt signing failed: {type(exc).__name__}")
-                receipt.error = f"signing_failed: {type(exc).__name__}"
+                raise RuntimeError(
+                    f"Receipt signing failed for tool={tool_name}: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
 
         # 5. Store receipt
         self.store.add(receipt)

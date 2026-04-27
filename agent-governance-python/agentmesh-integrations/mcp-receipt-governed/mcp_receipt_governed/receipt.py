@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -264,8 +265,17 @@ def verify_receipt_chain(
         return errors
 
     trusted_set = set(trusted_keys) if trusted_keys else None
+    seen_ids: set = set()
 
     for i, receipt in enumerate(receipts):
+        # Duplicate receipt_id detection (replay attack mitigation)
+        if receipt.receipt_id in seen_ids:
+            errors.append(
+                f"[{i}] Duplicate receipt_id {receipt.receipt_id} — "
+                f"possible replay attack"
+            )
+        seen_ids.add(receipt.receipt_id)
+
         # Chain contiguity
         if i == 0:
             if receipt.parent_receipt_hash is not None:
@@ -287,8 +297,8 @@ def verify_receipt_chain(
                 )
             elif trusted_set and receipt.signer_public_key not in trusted_set:
                 errors.append(
-                    f"[{i}] Signer key {(receipt.signer_public_key or '')[:16]}… "
-                    f"not in trusted key set"
+                    f"[{i}] Untrusted signer key {(receipt.signer_public_key or '')[:16]}… "
+                    f"not in trusted key set — receipt rejected"
                 )
         else:
             errors.append(f"[{i}] Unsigned receipt — missing Ed25519 signature")
@@ -299,15 +309,17 @@ def verify_receipt_chain(
 class ReceiptStore:
     """In-memory store for governance receipts with query capabilities.
 
-    Thread-safe for concurrent adapter usage.
+    All public methods are thread-safe via an internal ``threading.Lock``.
     """
 
     def __init__(self) -> None:
         self._receipts: List[GovernanceReceipt] = []
+        self._lock = threading.Lock()
 
     def add(self, receipt: GovernanceReceipt) -> None:
         """Store a receipt."""
-        self._receipts.append(receipt)
+        with self._lock:
+            self._receipts.append(receipt)
 
     def query(
         self,
@@ -325,7 +337,8 @@ class ReceiptStore:
         Returns:
             List of matching receipts.
         """
-        results = list(self._receipts)
+        with self._lock:
+            results = list(self._receipts)
         if agent_did:
             results = [r for r in results if r.agent_did == agent_did]
         if tool_name:
@@ -336,25 +349,30 @@ class ReceiptStore:
 
     def export(self) -> List[Dict[str, Any]]:
         """Export all receipts as a list of dictionaries."""
-        return [r.to_dict() for r in self._receipts]
+        with self._lock:
+            return [r.to_dict() for r in self._receipts]
 
     def clear(self) -> None:
         """Remove all receipts."""
-        self._receipts.clear()
+        with self._lock:
+            self._receipts.clear()
 
     @property
     def count(self) -> int:
         """Number of stored receipts."""
-        return len(self._receipts)
+        with self._lock:
+            return len(self._receipts)
 
     def get_stats(self) -> Dict[str, Any]:
         """Aggregate statistics for the receipt store."""
-        total = len(self._receipts)
-        allowed = sum(1 for r in self._receipts if r.cedar_decision == "allow")
+        with self._lock:
+            total = len(self._receipts)
+            allowed = sum(1 for r in self._receipts if r.cedar_decision == "allow")
+            snapshot = list(self._receipts)
         return {
             "total": total,
             "allowed": allowed,
             "denied": total - allowed,
-            "unique_agents": len({r.agent_did for r in self._receipts}),
-            "unique_tools": len({r.tool_name for r in self._receipts}),
+            "unique_agents": len({r.agent_did for r in snapshot}),
+            "unique_tools": len({r.tool_name for r in snapshot}),
         }

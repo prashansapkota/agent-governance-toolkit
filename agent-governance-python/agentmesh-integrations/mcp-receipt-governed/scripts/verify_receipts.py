@@ -40,18 +40,28 @@ def _reconstruct(data: Dict[str, Any]) -> GovernanceReceipt:
     )
 
 
-def verify_chain(receipts_data: List[Dict[str, Any]]) -> int:
+_EXIT_OK = 0
+_EXIT_CHAIN_ERROR = 1
+_EXIT_LOAD_ERROR = 2
+
+
+def verify_chain(
+    receipts_data: List[Dict[str, Any]],
+) -> tuple[int, List[Dict[str, Any]]]:
     """Verify a chain of exported receipts.
 
     Returns:
-        ``0`` if the chain is fully valid, ``1`` otherwise.
+        Tuple of (exit_code, per_receipt_results).
+        exit_code is 0 for a fully valid chain, 1 for integrity errors.
+        per_receipt_results contains per-receipt check details for JSON output.
     """
     if not receipts_data:
         print("  (empty chain — nothing to verify)")
-        return 0
+        return _EXIT_OK, []
 
-    errors = 0
+    total_errors = 0
     expected_parent_hash = None
+    results: List[Dict[str, Any]] = []
 
     for i, data in enumerate(receipts_data):
         receipt = _reconstruct(data)
@@ -60,20 +70,24 @@ def verify_chain(receipts_data: List[Dict[str, Any]]) -> int:
         )
         print(f"  [{i}] Receipt {rid_short}  (tool: {receipt.tool_name})")
 
+        receipt_errors: List[str] = []
+
         # 1. Hash chain contiguity
         if receipt.parent_receipt_hash != expected_parent_hash:
             exp = (expected_parent_hash or "None")[:16]
             got = (receipt.parent_receipt_hash or "None")[:16]
-            print(f"      ❌  Hash chain broken — expected {exp}…, got {got}…")
-            errors += 1
+            msg = f"Hash chain broken — expected {exp}…, got {got}…"
+            print(f"      ❌  {msg}")
+            receipt_errors.append(msg)
         else:
             print("      ✅  Hash chain contiguous")
 
         # 2. Canonical payload hash (round-trip check)
         stored_hash = data.get("payload_hash")
         if stored_hash and receipt.payload_hash() != stored_hash:
-            print("      ❌  Payload hash mismatch (canonical re-generation differs)")
-            errors += 1
+            msg = "Payload hash mismatch (canonical re-generation differs)"
+            print(f"      ❌  {msg}")
+            receipt_errors.append(msg)
         else:
             print("      ✅  Payload hash verified")
 
@@ -82,15 +96,27 @@ def verify_chain(receipts_data: List[Dict[str, Any]]) -> int:
             if verify_receipt(receipt):
                 print("      ✅  Ed25519 signature valid")
             else:
-                print("      ❌  Ed25519 signature verification failed")
-                errors += 1
+                msg = "Ed25519 signature verification failed"
+                print(f"      ❌  {msg}")
+                receipt_errors.append(msg)
         else:
             print("      ⚠️   Unsigned receipt (no signature)")
 
+        total_errors += len(receipt_errors)
         expected_parent_hash = receipt.payload_hash()
+        results.append(
+            {
+                "index": i,
+                "receipt_id": receipt.receipt_id,
+                "tool_name": receipt.tool_name,
+                "passed": len(receipt_errors) == 0,
+                "errors": receipt_errors,
+            }
+        )
         print()
 
-    return 0 if errors == 0 else 1
+    exit_code = _EXIT_OK if total_errors == 0 else _EXIT_CHAIN_ERROR
+    return exit_code, results
 
 
 def main() -> int:
@@ -106,42 +132,50 @@ def main() -> int:
         "--json",
         action="store_true",
         dest="json_output",
-        help="Output results as JSON for CI/CD integration",
+        help="Output results as JSON for CI/CD integration (includes per-receipt detail)",
     )
     args = parser.parse_args()
 
-    print()
-    print("╔══════════════════════════════════════════════════════╗")
-    print("║  MCP Receipt Chain — Offline Verification           ║")
-    print("╚══════════════════════════════════════════════════════╝")
-    print()
+    if not args.json_output:
+        print()
+        print("╔══════════════════════════════════════════════════════╗")
+        print("║  MCP Receipt Chain — Offline Verification           ║")
+        print("╚══════════════════════════════════════════════════════╝")
+        print()
 
     try:
         with open(args.receipts_file) as f:
             receipts_data = json.load(f)
     except Exception as exc:
-        print(f"  Error loading {args.receipts_file}: {exc}")
-        return 1
+        if args.json_output:
+            print(json.dumps({"error": str(exc), "exit_code": _EXIT_LOAD_ERROR}, indent=2))
+        else:
+            print(f"  Error loading {args.receipts_file}: {exc}")
+        return _EXIT_LOAD_ERROR
 
-    print(f"  Loaded {len(receipts_data)} receipt(s) from {args.receipts_file}")
-    print()
+    if not args.json_output:
+        print(f"  Loaded {len(receipts_data)} receipt(s) from {args.receipts_file}")
+        print()
 
-    result = verify_chain(receipts_data)
+    exit_code, per_receipt = verify_chain(receipts_data)
 
     if args.json_output:
         output = {
             "file": args.receipts_file,
             "total_receipts": len(receipts_data),
-            "passed": result == 0,
+            "passed": exit_code == _EXIT_OK,
+            "exit_code": exit_code,
+            "receipts": per_receipt,
         }
         print(json.dumps(output, indent=2))
-    elif result == 0:
+    elif exit_code == _EXIT_OK:
         print("  🎉 Verification passed — chain is contiguous and signatures are valid.")
     else:
         print("  🚨 Verification failed — the receipt chain has integrity issues.")
 
-    print()
-    return result
+    if not args.json_output:
+        print()
+    return exit_code
 
 
 if __name__ == "__main__":
