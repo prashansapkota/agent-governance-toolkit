@@ -262,13 +262,15 @@ def verify_receipt_chain(receipts: List[GovernanceReceipt]) -> List[str]:
                     f"got {(receipt.parent_receipt_hash or 'None')[:16]}…"
                 )
 
-        # Signature verification (skip unsigned)
+        # Signature verification
         if receipt.signature:
             if not verify_receipt(receipt):
                 errors.append(
                     f"[{i}] Ed25519 signature verification failed for "
                     f"receipt {receipt.receipt_id}"
                 )
+        else:
+            errors.append(f"[{i}] Unsigned receipt — missing Ed25519 signature")
 
     return errors
 

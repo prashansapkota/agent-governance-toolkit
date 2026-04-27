@@ -8,6 +8,7 @@ insertion detection, and SLSA provenance emission in isolation.
 """
 
 import json
+from urllib.parse import urlparse
 
 import pytest
 
@@ -258,7 +259,11 @@ class TestSLSAProvenance:
         slsa = r.to_slsa_provenance()
         run = slsa["predicate"]["runDetails"]
         assert run["metadata"]["invocationId"] == "test-id"
-        assert "agent-governance.org" in run["builder"]["id"]
+        builder_host = urlparse(run["builder"]["id"]).hostname
+        assert builder_host and (
+            builder_host == "agent-governance.org"
+            or builder_host.endswith(".agent-governance.org")
+        )
 
 
 # ── Hash Tool Args ──
@@ -369,9 +374,11 @@ class TestVerifyReceiptChain:
     def test_empty_chain_valid(self):
         assert verify_receipt_chain([]) == []
 
-    def test_single_receipt_valid(self):
+    def test_single_unsigned_receipt_flagged(self):
         r = GovernanceReceipt(receipt_id="only", timestamp=1.0)
-        assert verify_receipt_chain([r]) == []
+        errors = verify_receipt_chain([r])
+        assert len(errors) == 1
+        assert "Unsigned" in errors[0]
 
     def test_single_receipt_unexpected_parent(self):
         r = GovernanceReceipt(
@@ -380,8 +387,9 @@ class TestVerifyReceiptChain:
             parent_receipt_hash="surprise",
         )
         errors = verify_receipt_chain([r])
-        assert len(errors) == 1
-        assert "First receipt" in errors[0]
+        # Expect both: unexpected parent + unsigned
+        assert any("First receipt" in e for e in errors)
+        assert any("Unsigned" in e for e in errors)
 
     def test_valid_three_receipt_chain(self):
         r1 = GovernanceReceipt(receipt_id="r1", timestamp=1.0)
@@ -395,7 +403,10 @@ class TestVerifyReceiptChain:
             timestamp=3.0,
             parent_receipt_hash=r2.payload_hash(),
         )
-        assert verify_receipt_chain([r1, r2, r3]) == []
+        # All errors should be unsigned warnings only (chain is contiguous)
+        errors = verify_receipt_chain([r1, r2, r3])
+        assert all("Unsigned" in e for e in errors)
+        assert not any("Hash chain broken" in e for e in errors)
 
     def test_broken_chain_detected(self):
         r1 = GovernanceReceipt(receipt_id="r1", timestamp=1.0)
@@ -405,8 +416,9 @@ class TestVerifyReceiptChain:
             parent_receipt_hash="wrong-hash",
         )
         errors = verify_receipt_chain([r1, r2])
-        assert len(errors) == 1
-        assert "Hash chain broken" in errors[0]
+        chain_errors = [e for e in errors if "Unsigned" not in e]
+        assert len(chain_errors) == 1
+        assert "Hash chain broken" in chain_errors[0]
 
     def test_deleted_receipt_detected(self):
         """Removing a receipt from the middle breaks the chain."""
@@ -423,8 +435,9 @@ class TestVerifyReceiptChain:
         )
         # Delete r2 from the chain
         errors = verify_receipt_chain([r1, r3])
-        assert len(errors) == 1
-        assert "Hash chain broken" in errors[0]
+        chain_errors = [e for e in errors if "Unsigned" not in e]
+        assert len(chain_errors) == 1
+        assert "Hash chain broken" in chain_errors[0]
 
     @pytest.fixture()
     def signing_key(self):
