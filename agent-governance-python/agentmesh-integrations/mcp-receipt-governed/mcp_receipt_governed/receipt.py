@@ -23,6 +23,10 @@ from typing import Any, Dict, List, Literal, Optional
 _logger = logging.getLogger(__name__)
 
 
+class ReceiptSigningError(Exception):
+    """Raised when Ed25519 receipt signing fails."""
+
+
 @dataclass
 class GovernanceReceipt:
     """Signed proof of a governance decision for an MCP tool call."""
@@ -137,9 +141,8 @@ def verify_receipt(receipt: GovernanceReceipt) -> bool:
         public_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(receipt.signer_public_key))
         public_key.verify(bytes.fromhex(receipt.signature), receipt.canonical_payload().encode())
         return True
-    except ImportError:
-        _logger.error("cryptography not available — cannot verify Ed25519 signature")
-        return False
+    except ImportError as exc:
+        raise ImportError("The 'cryptography' library is required for Ed25519 signature verification.") from exc
     except Exception:
         return False
 
@@ -179,10 +182,13 @@ def verify_receipt_chain(
                 )
 
         if r.signature:
-            if not verify_receipt(r):
+            key = r.signer_public_key or ""
+            if len(key) != 64 or not all(c in "0123456789abcdefABCDEF" for c in key):
+                errors.append(f"[{i}] Malformed signer_public_key for receipt {r.receipt_id}")
+            elif not verify_receipt(r):
                 errors.append(f"[{i}] Ed25519 signature invalid for receipt {r.receipt_id}")
-            elif trusted_set and r.signer_public_key not in trusted_set:
-                errors.append(f"[{i}] Untrusted signer {(r.signer_public_key or '')[:16]}… — receipt rejected")
+            elif trusted_set and key not in trusted_set:
+                errors.append(f"[{i}] Untrusted signer {key[:16]}… — receipt rejected")
         else:
             errors.append(f"[{i}] Unsigned receipt — missing Ed25519 signature")
 
@@ -198,6 +204,8 @@ class ReceiptStore:
 
     def add(self, receipt: GovernanceReceipt) -> None:
         with self._lock:
+            if any(r.receipt_id == receipt.receipt_id for r in self._receipts):
+                raise ValueError(f"Duplicate receipt_id {receipt.receipt_id!r} — possible replay attack")
             self._receipts.append(receipt)
 
     def query(

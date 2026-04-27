@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from mcp_receipt_governed.receipt import (
     GovernanceReceipt,
+    ReceiptSigningError,
     ReceiptStore,
     hash_tool_args,
     sign_receipt,
@@ -121,7 +122,7 @@ class McpReceiptAdapter:
                 sign_receipt(receipt, self._signing_key)
             except Exception as exc:
                 _logger.error(f"Receipt signing failed: {type(exc).__name__}")
-                raise RuntimeError(
+                raise ReceiptSigningError(
                     f"Receipt signing failed for tool={tool_name}: {type(exc).__name__}: {exc}"
                 ) from exc
 

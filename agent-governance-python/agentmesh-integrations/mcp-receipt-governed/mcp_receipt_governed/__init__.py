@@ -16,6 +16,7 @@ Components:
 from mcp_receipt_governed.adapter import McpReceiptAdapter
 from mcp_receipt_governed.receipt import (
     GovernanceReceipt,
+    ReceiptSigningError,
     ReceiptStore,
     hash_tool_args,
     sign_receipt,
@@ -26,6 +27,7 @@ from mcp_receipt_governed.receipt import (
 __all__ = [
     "GovernanceReceipt",
     "McpReceiptAdapter",
+    "ReceiptSigningError",
     "ReceiptStore",
     "hash_tool_args",
     "sign_receipt",
