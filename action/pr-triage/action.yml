@@ -52,7 +52,7 @@ runs:
     - name: Install Dependencies
       shell: bash
       run: |
-        pip install requests PyGithub
+        pip install requests==2.31.0 PyGithub==2.3.0
 
     - name: Run PR Triage
       id: triage
